@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
@@ -18,36 +19,85 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Locale;
 
 public class DashboardActivity extends AppCompatActivity {
 
     private File rootProjectDir;
 
-    private ArrayList<String> projectList = new ArrayList<>();
-    private ArrayList<String> filteredList = new ArrayList<>();
+    private final ArrayList<String> projectList =
+            new ArrayList<>();
+
+    private final ArrayList<String> filteredList =
+            new ArrayList<>();
 
     private ArrayAdapter<String> adapter;
 
     private ListView listView;
     private EditText etSearch;
 
+    private Button btnNewProject;
+    private FloatingActionButton fabNewProject;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_dashboard);
 
-        rootProjectDir = new File(getExternalFilesDir(null), "MobilStudio_Projects");
+        super.onCreate(savedInstanceState);
+
+        setContentView(
+                R.layout.activity_dashboard
+        );
+
+        /*
+         * PROJE ANA KLASÖRÜ
+         */
+
+        rootProjectDir = new File(
+                getExternalFilesDir(null),
+                "MobilStudio_Projects"
+        );
 
         if (!rootProjectDir.exists()) {
-            rootProjectDir.mkdirs();
+
+            boolean created =
+                    rootProjectDir.mkdirs();
+
+            if (!created
+                    && !rootProjectDir.exists()) {
+
+                Toast.makeText(
+                        this,
+                        "Proje klasörü oluşturulamadı",
+                        Toast.LENGTH_LONG
+                ).show();
+
+                return;
+            }
         }
 
-        listView = findViewById(R.id.listProjects);
-        etSearch = findViewById(R.id.etSearch);
+        /*
+         * XML ELEMANLARI
+         */
 
-        Button btnNewProject = findViewById(R.id.btnNewProject);
+        listView = findViewById(
+                R.id.listProjects
+        );
 
-        FloatingActionButton fab = findViewById(R.id.fabNewProject);
+        etSearch = findViewById(
+                R.id.etSearch
+        );
+
+        btnNewProject = findViewById(
+                R.id.btnNewProject
+        );
+
+        fabNewProject = findViewById(
+                R.id.fabNewProject
+        );
+
+        /*
+         * PROJE LİSTESİ
+         */
 
         adapter = new ArrayAdapter<>(
                 this,
@@ -57,162 +107,574 @@ public class DashboardActivity extends AppCompatActivity {
 
         listView.setAdapter(adapter);
 
+        /*
+         * PROJELERİ YÜKLE
+         */
+
         loadProjects();
 
-        btnNewProject.setOnClickListener(v -> showNewProjectDialog());
+        /*
+         * YENİ PROJE BUTONU
+         */
 
-        fab.setOnClickListener(v -> showNewProjectDialog());
+        btnNewProject.setOnClickListener(
+                v -> showNewProjectDialog()
+        );
 
-        listView.setOnItemClickListener((parent, view, position, id) -> {
+        /*
+         * FAB
+         */
 
-            String projectName = filteredList.get(position);
+        fabNewProject.setOnClickListener(
+                v -> showNewProjectDialog()
+        );
 
-            File repo = new File(rootProjectDir, projectName);
+        /*
+         * PROJEYE TIKLAMA
+         */
 
-            Intent intent = new Intent(
-                    DashboardActivity.this,
-                    EditorActivity.class
-            );
+        listView.setOnItemClickListener(
+                (parent, view, position, id) -> {
 
-            intent.putExtra("REPO_PATH", repo.getAbsolutePath());
+                    if (position < 0
+                            || position >= filteredList.size()) {
 
-            startActivity(intent);
+                        return;
+                    }
 
-        });
+                    String projectName =
+                            filteredList.get(position);
 
-        etSearch.addTextChangedListener(new TextWatcher() {
+                    File repo =
+                            new File(
+                                    rootProjectDir,
+                                    projectName
+                            );
 
-            @Override
-            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                    if (!repo.exists()
+                            || !repo.isDirectory()) {
 
-            }
+                        Toast.makeText(
+                                DashboardActivity.this,
+                                "Proje bulunamadı",
+                                Toast.LENGTH_SHORT
+                        ).show();
 
-            @Override
-            public void onTextChanged(CharSequence s, int start, int before, int count) {
+                        loadProjects();
 
-                filterProjects(s.toString());
+                        return;
+                    }
 
-            }
+                    Intent intent =
+                            new Intent(
+                                    DashboardActivity.this,
+                                    EditorActivity.class
+                            );
 
-            @Override
-            public void afterTextChanged(Editable s) {
+                    intent.putExtra(
+                            "REPO_PATH",
+                            repo.getAbsolutePath()
+                    );
 
-            }
+                    startActivity(intent);
+                }
+        );
 
-        });
+        /*
+         * ARAMA
+         */
 
+        etSearch.addTextChangedListener(
+                new TextWatcher() {
+
+                    @Override
+                    public void beforeTextChanged(
+                            CharSequence s,
+                            int start,
+                            int count,
+                            int after
+                    ) {
+                    }
+
+                    @Override
+                    public void onTextChanged(
+                            CharSequence s,
+                            int start,
+                            int before,
+                            int count
+                    ) {
+
+                        filterProjects(
+                                s == null
+                                        ? ""
+                                        : s.toString()
+                        );
+                    }
+
+                    @Override
+                    public void afterTextChanged(
+                            Editable s
+                    ) {
+                    }
+                }
+        );
     }
 
     @Override
     protected void onResume() {
+
         super.onResume();
+
         loadProjects();
     }
+
+    /*
+     * PROJELERİ OKU
+     */
 
     private void loadProjects() {
 
         projectList.clear();
 
-        File[] files = rootProjectDir.listFiles();
+        if (rootProjectDir == null) {
+            return;
+        }
+
+        if (!rootProjectDir.exists()) {
+
+            if (!rootProjectDir.mkdirs()) {
+
+                Toast.makeText(
+                        this,
+                        "Proje klasörü oluşturulamadı",
+                        Toast.LENGTH_SHORT
+                ).show();
+
+                return;
+            }
+        }
+
+        File[] files =
+                rootProjectDir.listFiles();
 
         if (files != null) {
 
             for (File file : files) {
 
-                if (file.isDirectory()) {
+                if (file != null
+                        && file.isDirectory()
+                        && !file.isHidden()) {
 
-                    projectList.add(file.getName());
-
+                    projectList.add(
+                            file.getName()
+                    );
                 }
-
             }
-
         }
 
-        Collections.sort(projectList);
+        Collections.sort(
+                projectList,
+                String.CASE_INSENSITIVE_ORDER
+        );
 
-        filterProjects("");
+        String searchText = "";
 
+        if (etSearch != null) {
+
+            searchText =
+                    etSearch
+                            .getText()
+                            .toString();
+        }
+
+        filterProjects(searchText);
     }
 
-    private void filterProjects(String text) {
+    /*
+     * PROJE ARAMA
+     */
+
+    private void filterProjects(
+            String text
+    ) {
 
         filteredList.clear();
 
-        for (String project : projectList) {
+        String search =
+                text == null
+                        ? ""
+                        : text.trim()
+                        .toLowerCase(
+                                Locale.ROOT
+                        );
 
-            if (project.toLowerCase().contains(text.toLowerCase())) {
+        for (String project :
+                projectList) {
 
-                filteredList.add(project);
-
+            if (project == null) {
+                continue;
             }
 
+            if (search.isEmpty()
+                    || project
+                    .toLowerCase(
+                            Locale.ROOT
+                    )
+                    .contains(search)) {
+
+                filteredList.add(
+                        project
+                );
+            }
         }
 
-        adapter.notifyDataSetChanged();
+        if (adapter != null) {
 
+            adapter.notifyDataSetChanged();
+        }
     }
+
+    /*
+     * YENİ PROJE PENCERESİ
+     */
 
     private void showNewProjectDialog() {
 
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        final EditText input =
+                new EditText(this);
 
-        builder.setTitle("Yeni Proje");
+        input.setSingleLine(true);
 
-        final EditText input = new EditText(this);
+        input.setHint(
+                "Proje adı"
+        );
 
-        input.setHint("Proje Adı");
+        input.setPadding(
+                dp(16),
+                dp(8),
+                dp(16),
+                dp(8)
+        );
 
-        builder.setView(input);
+        AlertDialog dialog =
+                new AlertDialog.Builder(this)
+                        .setTitle(
+                                "Yeni Proje"
+                        )
+                        .setView(input)
+                        .setPositiveButton(
+                                "Oluştur",
+                                null
+                        )
+                        .setNegativeButton(
+                                "İptal",
+                                null
+                        )
+                        .create();
 
-        builder.setPositiveButton("Oluştur", (dialog, which) -> {
+        dialog.setOnShowListener(
+                d -> {
 
-            String projectName = input.getText().toString().trim();
+                    Button createButton =
+                            dialog.getButton(
+                                    AlertDialog.BUTTON_POSITIVE
+                            );
 
-            if (projectName.isEmpty()) {
+                    createButton.setOnClickListener(
+                            v -> {
 
-                Toast.makeText(
-                        this,
-                        "Proje adı boş olamaz",
-                        Toast.LENGTH_SHORT
-                ).show();
+                                String projectName =
+                                        input.getText()
+                                                .toString()
+                                                .trim();
 
-                return;
+                                if (projectName.isEmpty()) {
 
-            }
+                                    input.setError(
+                                            "Proje adı boş olamaz"
+                                    );
 
-            File repo = new File(rootProjectDir, projectName);
+                                    return;
+                                }
 
-            if (repo.exists()) {
+                                if (!isValidProjectName(
+                                        projectName
+                                )) {
 
-                Toast.makeText(
-                        this,
-                        "Bu proje zaten var",
-                        Toast.LENGTH_SHORT
-                ).show();
+                                    input.setError(
+                                            "Geçersiz proje adı"
+                                    );
 
-                return;
+                                    Toast.makeText(
+                                            this,
+                                            "Sadece geçerli bir klasör adı kullan",
+                                            Toast.LENGTH_SHORT
+                                    ).show();
 
-            }
+                                    return;
+                                }
 
-            if (repo.mkdirs()) {
+                                createProject(
+                                        projectName,
+                                        dialog
+                                );
+                            }
+                    );
 
-                Toast.makeText(
-                        this,
-                        "Proje oluşturuldu",
-                        Toast.LENGTH_SHORT
-                ).show();
+                    input.requestFocus();
+                }
+        );
 
-                loadProjects();
+        dialog.getWindow();
 
-            }
-
-        });
-
-        builder.setNegativeButton("İptal", null);
-
-        builder.show();
-
+        dialog.show();
     }
 
+    /*
+     * PROJE OLUŞTUR
+     */
+
+    private void createProject(
+            String projectName,
+            AlertDialog dialog
+    ) {
+
+        File repo =
+                new File(
+                        rootProjectDir,
+                        projectName
+                );
+
+        /*
+         * ANA KLASÖR DIŞINA ÇIKILMASINI ENGELLE
+         */
+
+        try {
+
+            String rootPath =
+                    rootProjectDir
+                            .getCanonicalPath();
+
+            String repoPath =
+                    repo
+                            .getCanonicalPath();
+
+            if (!repoPath.equals(rootPath)
+                    && !repoPath.startsWith(
+                    rootPath
+                            + File.separator
+            )) {
+
+                Toast.makeText(
+                        this,
+                        "Geçersiz proje yolu",
+                        Toast.LENGTH_SHORT
+                ).show();
+
+                return;
+            }
+
+        } catch (Exception e) {
+
+            Toast.makeText(
+                    this,
+                    "Proje yolu kontrol edilemedi",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
+        }
+
+        /*
+         * AYNI PROJE VAR MI?
+         */
+
+        if (repo.exists()) {
+
+            Toast.makeText(
+                    this,
+                    "Bu proje zaten var",
+                    Toast.LENGTH_SHORT
+            ).show();
+
+            return;
+        }
+
+        /*
+         * PROJE KLASÖRÜ
+         */
+
+        boolean created =
+                repo.mkdirs();
+
+        if (!created
+                && !repo.exists()) {
+
+            Toast.makeText(
+                    this,
+                    "Proje oluşturulamadı",
+                    Toast.LENGTH_LONG
+            ).show();
+
+            return;
+        }
+
+        /*
+         * BAŞLANGIÇ KLASÖRLERİ
+         *
+         * Şimdilik boş Android projesi
+         * iskeleti hazırlıyoruz.
+         */
+
+        createDirectory(
+                repo,
+                "app"
+        );
+
+        createDirectory(
+                repo,
+                "app/src"
+        );
+
+        createDirectory(
+                repo,
+                "app/src/main"
+        );
+
+        createDirectory(
+                repo,
+                "app/src/main/java"
+        );
+
+        createDirectory(
+                repo,
+                "app/src/main/res"
+        );
+
+        createDirectory(
+                repo,
+                "app/src/main/res/layout"
+        );
+
+        createDirectory(
+                repo,
+                "app/src/main/res/drawable"
+        );
+
+        createDirectory(
+                repo,
+                "app/src/main/res/mipmap"
+        );
+
+        createDirectory(
+                repo,
+                "app/src/main/res/values"
+        );
+
+        /*
+         * LİSTEYİ YENİLE
+         */
+
+        loadProjects();
+
+        /*
+         * PENCEREYİ KAPAT
+         */
+
+        if (dialog != null
+                && dialog.isShowing()) {
+
+            dialog.dismiss();
+        }
+
+        Toast.makeText(
+                this,
+                "Proje oluşturuldu",
+                Toast.LENGTH_SHORT
+        ).show();
+    }
+
+    /*
+     * KLASÖR OLUŞTUR
+     */
+
+    private boolean createDirectory(
+            File parent,
+            String name
+    ) {
+
+        File directory =
+                new File(
+                        parent,
+                        name
+                );
+
+        if (directory.exists()) {
+
+            return directory.isDirectory();
+        }
+
+        return directory.mkdirs();
+    }
+
+    /*
+     * PROJE ADI KONTROLÜ
+     */
+
+    private boolean isValidProjectName(
+            String name
+    ) {
+
+        if (name == null
+                || name.isEmpty()) {
+
+            return false;
+        }
+
+        if (name.equals(".")
+                || name.equals("..")) {
+
+            return false;
+        }
+
+        /*
+         * Windows / Linux / Android
+         * için sorun çıkarabilecek
+         * karakterleri engelliyoruz.
+         */
+
+        String invalid =
+                "\\/:*?\"<>|";
+
+        for (int i = 0;
+             i < invalid.length();
+             i++) {
+
+            if (name.indexOf(
+                    invalid.charAt(i)
+            ) >= 0) {
+
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /*
+     * DP
+     */
+
+    private int dp(int value) {
+
+        float density =
+                getResources()
+                        .getDisplayMetrics()
+                        .density;
+
+        return (int) (
+                value * density
+                        + 0.5f
+        );
+    }
 }
