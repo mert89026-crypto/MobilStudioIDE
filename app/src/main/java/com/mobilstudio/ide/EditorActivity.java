@@ -1,9 +1,13 @@
 package com.mobilstudio.ide;
 
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.DialogInterface;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.util.TypedValue;
@@ -11,12 +15,16 @@ import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
+import android.view.Window;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.PopupMenu;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,7 +42,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.List;
+import java.util.Locale;
 
 public class EditorActivity extends AppCompatActivity {
 
@@ -53,51 +61,55 @@ public class EditorActivity extends AppCompatActivity {
     private float dX;
     private float dY;
 
-    /**
-     * Açılan projenin ana klasörü.
-     *
-     * Örnek:
-     *
-     * /.../MobilStudio_Projects/TestApp
-     */
     private File repoDir;
-
-    /**
-     * Şu anda dosya gezgininde bulunduğumuz klasör.
-     */
     private File currentExplorerDir;
-
-    /**
-     * Şu anda editörde açık olan dosya.
-     */
     private File currentFile;
 
-    /**
-     * Kod değiştikçe sürekli önizleme üretmemek için
-     * küçük bir gecikme kullanıyoruz.
-     */
-    private android.os.Handler previewHandler =
-            new android.os.Handler();
+    private final Handler previewHandler =
+            new Handler();
 
     private Runnable previewRunnable;
 
+    /*
+     * Dosya gezgini
+     */
+    private Dialog fileExplorerDialog;
+
+    private LinearLayout explorerRoot;
+    private LinearLayout explorerListContainer;
+
+    private TextView explorerTitle;
+    private TextView explorerPath;
+
+    private EditText explorerSearch;
+
+    private File explorerDirectory;
+
+    private ArrayList<ExplorerItem> explorerItems =
+            new ArrayList<>();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+
         super.onCreate(savedInstanceState);
 
-        setContentView(R.layout.activity_editor);
+        setContentView(
+                R.layout.activity_editor
+        );
 
         /*
-         * ---------------------------------------------------------
-         * PROJE YOLUNU AL
-         * ---------------------------------------------------------
+         * ========================================================
+         * PROJE YOLU
+         * ========================================================
          */
 
         String receivedRepoPath =
-                getIntent().getStringExtra("REPO_PATH");
+                getIntent().getStringExtra(
+                        "REPO_PATH"
+                );
 
-        if (receivedRepoPath == null ||
-                receivedRepoPath.trim().isEmpty()) {
+        if (receivedRepoPath == null
+                || receivedRepoPath.trim().isEmpty()) {
 
             Toast.makeText(
                     this,
@@ -109,9 +121,13 @@ public class EditorActivity extends AppCompatActivity {
             return;
         }
 
-        repoDir = new File(receivedRepoPath);
+        repoDir =
+                new File(
+                        receivedRepoPath
+                );
 
-        if (!repoDir.exists() || !repoDir.isDirectory()) {
+        if (!repoDir.exists()
+                || !repoDir.isDirectory()) {
 
             Toast.makeText(
                     this,
@@ -123,34 +139,59 @@ public class EditorActivity extends AppCompatActivity {
             return;
         }
 
-        currentExplorerDir = repoDir;
+        currentExplorerDir =
+                repoDir;
 
         /*
-         * ---------------------------------------------------------
-         * VIEW'LARI BUL
-         * ---------------------------------------------------------
+         * ========================================================
+         * VIEW'LAR
+         * ========================================================
          */
 
-        etFilePath = findViewById(R.id.etFilePath);
-        etCode = findViewById(R.id.etCode);
+        etFilePath =
+                findViewById(
+                        R.id.etFilePath
+                );
 
-        btnSave = findViewById(R.id.btnSave);
-        btnOpen = findViewById(R.id.btnOpen);
-        btnBuild = findViewById(R.id.btnBuild);
+        etCode =
+                findViewById(
+                        R.id.etCode
+                );
+
+        btnSave =
+                findViewById(
+                        R.id.btnSave
+                );
+
+        btnOpen =
+                findViewById(
+                        R.id.btnOpen
+                );
+
+        btnBuild =
+                findViewById(
+                        R.id.btnBuild
+                );
 
         floatingPreview =
-                findViewById(R.id.floatingPreview);
+                findViewById(
+                        R.id.floatingPreview
+                );
 
         phoneCanvas =
-                findViewById(R.id.phoneCanvas);
+                findViewById(
+                        R.id.phoneCanvas
+                );
 
         txtStatus =
-                findViewById(R.id.txtStatus);
+                findViewById(
+                        R.id.txtStatus
+                );
 
         /*
-         * ---------------------------------------------------------
-         * BAŞLANGIÇ DURUMU
-         * ---------------------------------------------------------
+         * ========================================================
+         * BAŞLANGIÇ
+         * ========================================================
          */
 
         etFilePath.setText("");
@@ -159,69 +200,51 @@ public class EditorActivity extends AppCompatActivity {
                 "Proje: " + repoDir.getName()
         );
 
-        /*
-         * ---------------------------------------------------------
-         * ÖNİZLEMEYİ SÜRÜKLE
-         * ---------------------------------------------------------
-         */
-
         setupFloatingPreview();
 
         /*
-         * ---------------------------------------------------------
-         * DOSYA YOLU ARTIK KLASÖR OLUŞTURMUYOR
-         *
-         * ÖNCEKİ KODDA:
-         *
-         * activity_main/
-         *
-         * gibi bir şey yazınca otomatik klasör oluşturuluyordu.
-         *
-         * BUNU TAMAMEN KALDIRDIK.
-         * ---------------------------------------------------------
+         * ========================================================
+         * XML DEĞİŞİNCE ÖNİZLEME
+         * ========================================================
          */
 
-        /*
-         * ---------------------------------------------------------
-         * KOD DEĞİŞTİĞİNDE ÖNİZLEME
-         * ---------------------------------------------------------
-         */
+        etCode.addTextChangedListener(
+                new TextWatcher() {
 
-        etCode.addTextChangedListener(new TextWatcher() {
+                    @Override
+                    public void beforeTextChanged(
+                            CharSequence s,
+                            int start,
+                            int count,
+                            int after
+                    ) {
+                    }
 
-            @Override
-            public void beforeTextChanged(
-                    CharSequence s,
-                    int start,
-                    int count,
-                    int after
-            ) {
-            }
+                    @Override
+                    public void onTextChanged(
+                            CharSequence s,
+                            int start,
+                            int before,
+                            int count
+                    ) {
 
-            @Override
-            public void onTextChanged(
-                    CharSequence s,
-                    int start,
-                    int before,
-                    int count
-            ) {
+                        schedulePreview(
+                                s.toString()
+                        );
+                    }
 
-                schedulePreview(
-                        s.toString()
-                );
-            }
-
-            @Override
-            public void afterTextChanged(
-                    Editable s
-            ) {
-            }
-        });
+                    @Override
+                    public void afterTextChanged(
+                            Editable s
+                    ) {
+                    }
+                }
+        );
 
         /*
-         * ---------------------------------------------------------
+         * ========================================================
          * KAYDET
-         * ---------------------------------------------------------
+         * ========================================================
          */
 
         btnSave.setOnClickListener(
@@ -229,25 +252,35 @@ public class EditorActivity extends AppCompatActivity {
         );
 
         /*
-         * ---------------------------------------------------------
+         * ========================================================
          * AÇ
-         *
-         * ARTIK DOSYA YOLUNU ELLE YAZMAK ZORUNDA DEĞİLİZ.
-         * ---------------------------------------------------------
+         * ========================================================
          */
 
         btnOpen.setOnClickListener(
-                v -> showFileExplorer(repoDir)
+                v -> showFileExplorer(
+                        repoDir
+                )
         );
 
         /*
-         * ---------------------------------------------------------
+         * ========================================================
+         * DOSYA YOLU
+         * ========================================================
+         */
+
+        etFilePath.setOnClickListener(
+                v -> showFileExplorer(
+                        currentExplorerDir == null
+                                ? repoDir
+                                : currentExplorerDir
+                )
+        );
+
+        /*
+         * ========================================================
          * DERLE
-         *
-         * Şimdilik gerçek APK derleme bağlamıyoruz.
-         * Butonun mevcut olduğunu biliyoruz ama burada sahte
-         * "APK oluşturuldu" mesajı vermiyoruz.
-         * ---------------------------------------------------------
+         * ========================================================
          */
 
         btnBuild.setOnClickListener(
@@ -265,25 +298,12 @@ public class EditorActivity extends AppCompatActivity {
                 }
         );
 
-        /*
-         * ---------------------------------------------------------
-         * DOSYA YOLU ALANINA DOKUNUNCA DOSYA GEZGİNİ
-         * ---------------------------------------------------------
-         */
-
-        etFilePath.setOnClickListener(
-                v -> showFileExplorer(repoDir)
-        );
-
-        /*
-         * İlk açılışta boş önizleme.
-         */
         phoneCanvas.removeAllViews();
     }
 
     /*
      * ============================================================
-     * ÖNİZLEMEYİ SÜRÜKLEME
+     * YÜZEN ÖNİZLEME
      * ============================================================
      */
 
@@ -380,12 +400,10 @@ public class EditorActivity extends AppCompatActivity {
             );
         }
 
-        previewRunnable = () -> {
-
-            renderLiveXml(
-                    xmlCode
-            );
-        };
+        previewRunnable =
+                () -> renderLiveXml(
+                        xmlCode
+                );
 
         previewHandler.postDelayed(
                 previewRunnable,
@@ -395,21 +413,7 @@ public class EditorActivity extends AppCompatActivity {
 
     /*
      * ============================================================
-     * DOSYA GEZGİNİ
-     * ============================================================
-     *
-     * Örnek:
-     *
-     * TestApp
-     *   app/
-     *      src/
-     *         main/
-     *             java/
-     *             res/
-     *             AndroidManifest.xml
-     *
-     * Klasöre basınca içine girer.
-     * Dosyaya basınca editörde açar.
+     * DOSYA GEZGİNİNİ AÇ
      * ============================================================
      */
 
@@ -421,7 +425,8 @@ public class EditorActivity extends AppCompatActivity {
             return;
         }
 
-        if (!directory.exists()) {
+        if (!directory.exists()
+                || !directory.isDirectory()) {
 
             Toast.makeText(
                     this,
@@ -432,11 +437,11 @@ public class EditorActivity extends AppCompatActivity {
             return;
         }
 
-        if (!directory.isDirectory()) {
+        if (!isInsideProject(directory)) {
 
             Toast.makeText(
                     this,
-                    "Bu bir klasör değil",
+                    "Bu klasöre erişilemez",
                     Toast.LENGTH_SHORT
             ).show();
 
@@ -446,13 +451,1256 @@ public class EditorActivity extends AppCompatActivity {
         currentExplorerDir =
                 directory;
 
-        final AlertDialog dialog =
-                new AlertDialog.Builder(this)
-                        .create();
+        /*
+         * Daha önce açık dialog varsa
+         * sadece klasörü yenile.
+         */
+
+        if (fileExplorerDialog != null
+                && fileExplorerDialog.isShowing()) {
+
+            explorerDirectory =
+                    directory;
+
+            refreshExplorer();
+
+            return;
+        }
+
+        explorerDirectory =
+                directory;
+
+        fileExplorerDialog =
+                new Dialog(this);
+
+        fileExplorerDialog.requestWindowFeature(
+                Window.FEATURE_NO_TITLE
+        );
+
+        explorerRoot =
+                new LinearLayout(this);
+
+        explorerRoot.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        explorerRoot.setBackgroundColor(
+                Color.rgb(
+                        20,
+                        23,
+                        32
+                )
+        );
 
         /*
-         * Ana dikey kutu
+         * ========================================================
+         * ÜST BAR
+         * ========================================================
          */
+
+        LinearLayout topBar =
+                new LinearLayout(this);
+
+        topBar.setOrientation(
+                LinearLayout.HORIZONTAL
+        );
+
+        topBar.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        topBar.setPadding(
+                dp(8),
+                dp(6),
+                dp(6),
+                dp(6)
+        );
+
+        topBar.setBackgroundColor(
+                Color.rgb(
+                        48,
+                        48,
+                        80
+                )
+        );
+
+        /*
+         * GERİ
+         */
+
+        TextView back =
+                createTopIcon(
+                        "‹"
+                );
+
+        back.setOnClickListener(
+                v -> {
+
+                    if (explorerDirectory.equals(
+                            repoDir
+                    )) {
+
+                        fileExplorerDialog.dismiss();
+
+                        return;
+                    }
+
+                    File parent =
+                            explorerDirectory
+                                    .getParentFile();
+
+                    if (parent != null
+                            && isInsideProject(parent)) {
+
+                        explorerDirectory =
+                                parent;
+
+                        refreshExplorer();
+                    }
+                }
+        );
+
+        topBar.addView(
+                back,
+                new LinearLayout.LayoutParams(
+                        dp(48),
+                        dp(52)
+                )
+        );
+
+        /*
+         * BAŞLIK + YOL
+         */
+
+        LinearLayout titleBox =
+                new LinearLayout(this);
+
+        titleBox.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        titleBox.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        explorerTitle =
+                new TextView(this);
+
+        explorerTitle.setTextColor(
+                Color.WHITE
+        );
+
+        explorerTitle.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                21
+        );
+
+        explorerTitle.setTypeface(
+                Typeface.DEFAULT,
+                Typeface.NORMAL
+        );
+
+        explorerPath =
+                new TextView(this);
+
+        explorerPath.setTextColor(
+                Color.WHITE
+        );
+
+        explorerPath.setAlpha(
+                0.75f
+        );
+
+        explorerPath.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                12
+        );
+
+        titleBox.addView(
+                explorerTitle
+        );
+
+        titleBox.addView(
+                explorerPath
+        );
+
+        topBar.addView(
+                titleBox,
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(52),
+                        1
+                )
+        );
+
+        /*
+         * ARAMA
+         */
+
+        TextView searchButton =
+                createTopIcon(
+                        "⌕"
+                );
+
+        searchButton.setOnClickListener(
+                v -> {
+
+                    if (explorerSearch
+                            .getVisibility()
+                            == View.VISIBLE) {
+
+                        explorerSearch
+                                .setVisibility(
+                                        View.GONE
+                                );
+
+                    } else {
+
+                        explorerSearch
+                                .setVisibility(
+                                        View.VISIBLE
+                                );
+
+                        explorerSearch.requestFocus();
+                    }
+                }
+        );
+
+        topBar.addView(
+                searchButton,
+                new LinearLayout.LayoutParams(
+                        dp(48),
+                        dp(52)
+                )
+        );
+
+        /*
+         * GÖRÜNÜM
+         */
+
+        TextView viewButton =
+                createTopIcon(
+                        "☷"
+                );
+
+        viewButton.setOnClickListener(
+                v -> Toast.makeText(
+                        this,
+                        "Liste görünümü",
+                        Toast.LENGTH_SHORT
+                ).show()
+        );
+
+        topBar.addView(
+                viewButton,
+                new LinearLayout.LayoutParams(
+                        dp(48),
+                        dp(52)
+                )
+        );
+
+        /*
+         * ÜÇ NOKTA
+         */
+
+        TextView moreButton =
+                createTopIcon(
+                        "⋮"
+                );
+
+        moreButton.setOnClickListener(
+                v -> showExplorerMenu(
+                        moreButton
+                )
+        );
+
+        topBar.addView(
+                moreButton,
+                new LinearLayout.LayoutParams(
+                        dp(44),
+                        dp(52)
+                )
+        );
+
+        explorerRoot.addView(
+                topBar
+        );
+
+        /*
+         * ========================================================
+         * ARAMA ALANI
+         * ========================================================
+         */
+
+        explorerSearch =
+                new EditText(this);
+
+        explorerSearch.setSingleLine(
+                true
+        );
+
+        explorerSearch.setHint(
+                "Dosya veya klasör ara..."
+        );
+
+        explorerSearch.setHintTextColor(
+                Color.rgb(
+                        150,
+                        155,
+                        165
+                )
+        );
+
+        explorerSearch.setTextColor(
+                Color.WHITE
+        );
+
+        explorerSearch.setTextSize(
+                15
+        );
+
+        explorerSearch.setPadding(
+                dp(14),
+                0,
+                dp(14),
+                0
+        );
+
+        GradientDrawable searchBackground =
+                new GradientDrawable();
+
+        searchBackground.setColor(
+                Color.rgb(
+                        38,
+                        42,
+                        52
+                )
+        );
+
+        searchBackground.setCornerRadius(
+                dp(6)
+        );
+
+        explorerSearch.setBackground(
+                searchBackground
+        );
+
+        explorerSearch.setVisibility(
+                View.GONE
+        );
+
+        explorerSearch.addTextChangedListener(
+                new TextWatcher() {
+
+                    @Override
+                    public void beforeTextChanged(
+                            CharSequence s,
+                            int start,
+                            int count,
+                            int after
+                    ) {
+                    }
+
+                    @Override
+                    public void onTextChanged(
+                            CharSequence s,
+                            int start,
+                            int before,
+                            int count
+                    ) {
+
+                        refreshExplorer();
+                    }
+
+                    @Override
+                    public void afterTextChanged(
+                            Editable s
+                    ) {
+                    }
+                }
+        );
+
+        explorerRoot.addView(
+                explorerSearch,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(48)
+                )
+        );
+
+        /*
+         * ========================================================
+         * DOSYA LİSTESİ
+         * ========================================================
+         */
+
+        ScrollView scrollView =
+                new ScrollView(this);
+
+        scrollView.setFillViewport(
+                true
+        );
+
+        explorerListContainer =
+                new LinearLayout(this);
+
+        explorerListContainer.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        explorerListContainer.setPadding(
+                dp(6),
+                dp(4),
+                dp(6),
+                dp(90)
+        );
+
+        scrollView.addView(
+                explorerListContainer,
+                new ScrollView.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT
+                )
+        );
+
+        explorerRoot.addView(
+                scrollView,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1
+                )
+        );
+
+        /*
+         * ========================================================
+         * ALT / + BUTONU
+         * ========================================================
+         */
+
+        FrameLayout bottomFrame =
+                new FrameLayout(this);
+
+        bottomFrame.setBackgroundColor(
+                Color.TRANSPARENT
+        );
+
+        TextView plus =
+                new TextView(this);
+
+        plus.setText(
+                "+"
+        );
+
+        plus.setTextColor(
+                Color.WHITE
+        );
+
+        plus.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                32
+        );
+
+        plus.setGravity(
+                Gravity.CENTER
+        );
+
+        GradientDrawable plusBackground =
+                new GradientDrawable();
+
+        plusBackground.setColor(
+                Color.rgb(
+                        91,
+                        135,
+                        245
+                )
+        );
+
+        plusBackground.setShape(
+                GradientDrawable.OVAL
+        );
+
+        plus.setBackground(
+                plusBackground
+        );
+
+        plus.setElevation(
+                dp(8)
+        );
+
+        FrameLayout.LayoutParams plusParams =
+                new FrameLayout.LayoutParams(
+                        dp(66),
+                        dp(66)
+                );
+
+        plusParams.gravity =
+                Gravity.END
+                        | Gravity.BOTTOM;
+
+        plusParams.setMargins(
+                0,
+                0,
+                dp(20),
+                dp(18)
+        );
+
+        bottomFrame.addView(
+                plus,
+                plusParams
+        );
+
+        plus.setOnClickListener(
+                v -> showCreateMenu(
+                        explorerDirectory
+                )
+        );
+
+        explorerRoot.addView(
+                bottomFrame,
+                new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(86)
+                )
+        );
+
+        /*
+         * DIALOG
+         */
+
+        fileExplorerDialog.setContentView(
+                explorerRoot
+        );
+
+        fileExplorerDialog.setOnDismissListener(
+                dialog -> {
+
+                    fileExplorerDialog =
+                            null;
+
+                    explorerRoot =
+                            null;
+
+                    explorerListContainer =
+                            null;
+                }
+        );
+
+        fileExplorerDialog.show();
+
+        Window window =
+                fileExplorerDialog.getWindow();
+
+        if (window != null) {
+
+            window.setBackgroundDrawableResource(
+                    android.R.color.transparent
+            );
+
+            WindowManager.LayoutParams params =
+                    new WindowManager.LayoutParams();
+
+            params.copyFrom(
+                    window.getAttributes()
+            );
+
+            params.width =
+                    (int) (
+                            getResources()
+                                    .getDisplayMetrics()
+                                    .widthPixels
+                                    * 0.97f
+                    );
+
+            params.height =
+                    (int) (
+                            getResources()
+                                    .getDisplayMetrics()
+                                    .heightPixels
+                                    * 0.90f
+                    );
+
+            window.setAttributes(
+                    params
+            );
+        }
+
+        refreshExplorer();
+    }
+
+    /*
+     * ============================================================
+     * DOSYA GEZGİNİ YENİLE
+     * ============================================================
+     */
+
+    private void refreshExplorer() {
+
+        if (explorerListContainer == null
+                || explorerDirectory == null) {
+
+            return;
+        }
+
+        explorerListContainer.removeAllViews();
+
+        explorerTitle.setText(
+                explorerDirectory.equals(repoDir)
+                        ? repoDir.getName()
+                        : explorerDirectory.getName()
+        );
+
+        explorerPath.setText(
+                getShortExplorerPath(
+                        explorerDirectory
+                )
+        );
+
+        explorerItems =
+                getDirectoryItems(
+                        explorerDirectory
+                );
+
+        String searchText =
+                explorerSearch == null
+                        ? ""
+                        : explorerSearch
+                        .getText()
+                        .toString()
+                        .trim()
+                        .toLowerCase(
+                                Locale.ROOT
+                        );
+
+        /*
+         * ÜST KLASÖR
+         */
+
+        if (!explorerDirectory.equals(
+                repoDir
+        )) {
+
+            View parentRow =
+                    createParentRow();
+
+            explorerListContainer.addView(
+                    parentRow
+            );
+        }
+
+        /*
+         * DOSYALAR
+         */
+
+        for (ExplorerItem item :
+                explorerItems) {
+
+            if (!searchText.isEmpty()
+                    && !item.getName()
+                    .toLowerCase(
+                            Locale.ROOT
+                    )
+                    .contains(searchText)) {
+
+                continue;
+            }
+
+            View row =
+                    createExplorerRow(
+                            item
+                    );
+
+            explorerListContainer.addView(
+                    row
+            );
+        }
+
+        if (explorerListContainer
+                .getChildCount() == 0) {
+
+            TextView empty =
+                    new TextView(this);
+
+            empty.setText(
+                    "Bu klasör boş"
+            );
+
+            empty.setTextColor(
+                    Color.rgb(
+                            150,
+                            155,
+                            165
+                    )
+            );
+
+            empty.setTextSize(
+                    16
+            );
+
+            empty.setGravity(
+                    Gravity.CENTER
+            );
+
+            empty.setPadding(
+                    dp(20),
+                    dp(80),
+                    dp(20),
+                    dp(80)
+            );
+
+            explorerListContainer.addView(
+                    empty
+            );
+        }
+    }
+
+    /*
+     * ============================================================
+     * ".." SATIRI
+     * ============================================================
+     */
+
+    private View createParentRow() {
+
+        LinearLayout row =
+                createExplorerBaseRow();
+
+        TextView icon =
+                createFileIcon(
+                        "↑",
+                        Color.rgb(
+                                255,
+                                170,
+                                30
+                        )
+                );
+
+        row.addView(
+                icon,
+                new LinearLayout.LayoutParams(
+                        dp(82),
+                        dp(64)
+                )
+        );
+
+        LinearLayout textBox =
+                new LinearLayout(this);
+
+        textBox.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        TextView name =
+                createRowName(
+                        ".."
+                );
+
+        TextView info =
+                createRowInfo(
+                        "Üst klasör"
+                );
+
+        textBox.addView(
+                name
+        );
+
+        textBox.addView(
+                info
+        );
+
+        row.addView(
+                textBox,
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(64),
+                        1
+                )
+        );
+
+        row.setOnClickListener(
+                v -> {
+
+                    File parent =
+                            explorerDirectory
+                                    .getParentFile();
+
+                    if (parent != null
+                            && isInsideProject(parent)) {
+
+                        explorerDirectory =
+                                parent;
+
+                        refreshExplorer();
+                    }
+                }
+        );
+
+        return row;
+    }
+
+    /*
+     * ============================================================
+     * DOSYA/KLASÖR SATIRI
+     * ============================================================
+     */
+
+    private View createExplorerRow(
+            ExplorerItem item
+    ) {
+
+        LinearLayout row =
+                createExplorerBaseRow();
+
+        String iconText;
+        int iconColor;
+
+        if (item.isFolder()) {
+
+            iconText =
+                    "📁";
+
+            iconColor =
+                    Color.rgb(
+                            255,
+                            165,
+                            25
+                    );
+
+        } else {
+
+            iconText =
+                    getExplorerFileIcon(
+                            item
+                    );
+
+            iconColor =
+                    Color.rgb(
+                            225,
+                            230,
+                            240
+                    );
+        }
+
+        TextView icon =
+                createFileIcon(
+                        iconText,
+                        iconColor
+                );
+
+        row.addView(
+                icon,
+                new LinearLayout.LayoutParams(
+                        dp(82),
+                        dp(70)
+                )
+        );
+
+        LinearLayout textBox =
+                new LinearLayout(this);
+
+        textBox.setOrientation(
+                LinearLayout.VERTICAL
+        );
+
+        textBox.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        TextView name =
+                createRowName(
+                        item.getName()
+                );
+
+        TextView info =
+                createRowInfo(
+                        getItemInfo(item)
+                );
+
+        textBox.addView(
+                name
+        );
+
+        textBox.addView(
+                info
+        );
+
+        row.addView(
+                textBox,
+                new LinearLayout.LayoutParams(
+                        0,
+                        dp(70),
+                        1
+                )
+        );
+
+        TextView date =
+                new TextView(this);
+
+        date.setText(
+                formatDate(
+                        item.getLastModified()
+                )
+        );
+
+        date.setTextColor(
+                Color.rgb(
+                        160,
+                        165,
+                        175
+                )
+        );
+
+        date.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                12
+        );
+
+        date.setGravity(
+                Gravity.CENTER_VERTICAL
+                        | Gravity.END
+        );
+
+        date.setPadding(
+                dp(4),
+                0,
+                dp(8),
+                0
+        );
+
+        row.addView(
+                date,
+                new LinearLayout.LayoutParams(
+                        dp(92),
+                        dp(70)
+                )
+        );
+
+        row.setOnClickListener(
+                v -> {
+
+                    if (item.isFolder()) {
+
+                        explorerDirectory =
+                                item.getFile();
+
+                        refreshExplorer();
+
+                    } else {
+
+                        if (fileExplorerDialog != null) {
+
+                            fileExplorerDialog.dismiss();
+                        }
+
+                        openFileInEditor(
+                                item.getFile()
+                        );
+                    }
+                }
+        );
+
+        row.setOnLongClickListener(
+                v -> {
+
+                    showFileItemMenu(
+                            item,
+                            row
+                    );
+
+                    return true;
+                }
+        );
+
+        return row;
+    }
+
+    /*
+     * ============================================================
+     * SATIR ANA KUTUSU
+     * ============================================================
+     */
+
+    private LinearLayout createExplorerBaseRow() {
+
+        LinearLayout row =
+                new LinearLayout(this);
+
+        row.setOrientation(
+                LinearLayout.HORIZONTAL
+        );
+
+        row.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        row.setPadding(
+                dp(6),
+                dp(2),
+                dp(4),
+                dp(2)
+        );
+
+        GradientDrawable background =
+                new GradientDrawable();
+
+        background.setColor(
+                Color.rgb(
+                        20,
+                        23,
+                        32
+                )
+        );
+
+        background.setCornerRadius(
+                dp(4)
+        );
+
+        row.setBackground(
+                background
+        );
+
+        row.setMinimumHeight(
+                dp(70)
+        );
+
+        return row;
+    }
+
+    /*
+     * ============================================================
+     * İKON
+     * ============================================================
+     */
+
+    private TextView createFileIcon(
+            String text,
+            int color
+    ) {
+
+        TextView icon =
+                new TextView(this);
+
+        icon.setText(
+                text
+        );
+
+        icon.setTextColor(
+                color
+        );
+
+        icon.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                38
+        );
+
+        icon.setGravity(
+                Gravity.CENTER
+        );
+
+        return icon;
+    }
+
+    /*
+     * ============================================================
+     * DOSYA ADI
+     * ============================================================
+     */
+
+    private TextView createRowName(
+            String text
+    ) {
+
+        TextView name =
+                new TextView(this);
+
+        name.setText(
+                text
+        );
+
+        name.setTextColor(
+                Color.WHITE
+        );
+
+        name.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                17
+        );
+
+        name.setMaxLines(
+                1
+        );
+
+        name.setEllipsize(
+                android.text.TextUtils.TruncateAt.END
+        );
+
+        return name;
+    }
+
+    /*
+     * ============================================================
+     * BİLGİ
+     * ============================================================
+     */
+
+    private TextView createRowInfo(
+            String text
+    ) {
+
+        TextView info =
+                new TextView(this);
+
+        info.setText(
+                text
+        );
+
+        info.setTextColor(
+                Color.rgb(
+                        160,
+                        165,
+                        175
+                )
+        );
+
+        info.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                12
+        );
+
+        info.setMaxLines(
+                1
+        );
+
+        return info;
+    }
+
+    /*
+     * ============================================================
+     * DOSYA BİLGİSİ
+     * ============================================================
+     */
+
+    private String getItemInfo(
+            ExplorerItem item
+    ) {
+
+        if (item.isFolder()) {
+
+            File[] files =
+                    item.getFile()
+                            .listFiles();
+
+            if (files == null
+                    || files.length == 0) {
+
+                return "Boş";
+            }
+
+            int count = 0;
+
+            for (File file : files) {
+
+                if (file != null
+                        && !file.isHidden()) {
+
+                    count++;
+                }
+            }
+
+            return count + " öğe";
+        }
+
+        return formatFileSize(
+                item.getSize()
+        );
+    }
+
+    /*
+     * ============================================================
+     * DOSYA İKONU
+     * ============================================================
+     */
+
+    private String getExplorerFileIcon(
+            ExplorerItem item
+    ) {
+
+        String ext =
+                item.getExtension()
+                        .toLowerCase(
+                                Locale.ROOT
+                        );
+
+        if (ext.equals("zip")
+                || ext.equals("rar")
+                || ext.equals("7z")
+                || ext.equals("jar")
+                || ext.equals("aar")) {
+
+            return "📦";
+        }
+
+        if (ext.equals("java")) {
+            return "☕";
+        }
+
+        if (ext.equals("kt")) {
+            return "K";
+        }
+
+        if (ext.equals("xml")) {
+            return "📄";
+        }
+
+        if (ext.equals("json")) {
+            return "{}";
+        }
+
+        if (ext.equals("gradle")) {
+            return "⚙";
+        }
+
+        if (ext.equals("png")
+                || ext.equals("jpg")
+                || ext.equals("jpeg")
+                || ext.equals("webp")
+                || ext.equals("gif")) {
+
+            return "🖼";
+        }
+
+        if (ext.equals("mp4")
+                || ext.equals("mkv")
+                || ext.equals("avi")) {
+
+            return "▶";
+        }
+
+        if (ext.equals("pdf")) {
+            return "PDF";
+        }
+
+        if (ext.equals("doc")
+                || ext.equals("docx")) {
+
+            return "DOC";
+        }
+
+        return "📄";
+    }
+
+    /*
+     * ============================================================
+     * + OLUŞTUR
+     * ============================================================
+     */
+
+    private void showCreateMenu(
+            File directory
+    ) {
+
+        final Dialog createDialog =
+                new Dialog(this);
 
         LinearLayout root =
                 new LinearLayout(this);
@@ -462,369 +1710,836 @@ public class EditorActivity extends AppCompatActivity {
         );
 
         root.setPadding(
-                dp(12),
-                dp(8),
-                dp(12),
-                dp(8)
+                dp(20),
+                dp(16),
+                dp(20),
+                dp(16)
         );
 
-        /*
-         * ---------------------------------------------------------
-         * BAŞLIK
-         * ---------------------------------------------------------
-         */
-
-        LinearLayout header =
-                new LinearLayout(this);
-
-        header.setOrientation(
-                LinearLayout.HORIZONTAL
-        );
-
-        header.setGravity(
-                Gravity.CENTER_VERTICAL
+        root.setBackgroundColor(
+                Color.rgb(
+                        48,
+                        48,
+                        80
+                )
         );
 
         TextView title =
                 new TextView(this);
 
         title.setText(
-                directory.equals(repoDir)
-                        ? repoDir.getName()
-                        : directory.getName()
-        );
-
-        title.setTextSize(
-                TypedValue.COMPLEX_UNIT_SP,
-                19
+                "Oluştur"
         );
 
         title.setTextColor(
                 Color.rgb(
-                        17,
-                        24,
-                        39
+                        180,
+                        195,
+                        255
                 )
+        );
+
+        title.setTextSize(
+                15
         );
 
         title.setTypeface(
-                null,
-                android.graphics.Typeface.BOLD
+                Typeface.DEFAULT,
+                Typeface.BOLD
         );
 
-        LinearLayout.LayoutParams titleParams =
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(50),
-                        1
-                );
-
-        header.addView(
-                title,
-                titleParams
-        );
-
-        /*
-         * + OLUŞTUR
-         */
-
-        Button createButton =
-                new Button(this);
-
-        createButton.setText("+");
-
-        createButton.setTextSize(
-                TypedValue.COMPLEX_UNIT_SP,
-                22
-        );
-
-        createButton.setOnClickListener(
-                v -> showCreateMenu(
-                        directory,
-                        dialog
-                )
-        );
-
-        header.addView(
-                createButton,
-                new LinearLayout.LayoutParams(
-                        dp(55),
-                        dp(50)
-                )
-        );
-
-        root.addView(
-                header
-        );
-
-        /*
-         * ---------------------------------------------------------
-         * YOL
-         * ---------------------------------------------------------
-         */
-
-        TextView pathText =
-                new TextView(this);
-
-        pathText.setText(
-                getRelativePath(directory)
-        );
-
-        pathText.setTextSize(
-                TypedValue.COMPLEX_UNIT_SP,
-                12
-        );
-
-        pathText.setTextColor(
-                Color.DKGRAY
-        );
-
-        pathText.setPadding(
+        title.setPadding(
+                dp(8),
                 dp(4),
-                0,
-                dp(4),
-                dp(8)
+                dp(8),
+                dp(16)
         );
 
         root.addView(
-                pathText
+                title
         );
 
-        /*
-         * ---------------------------------------------------------
-         * DOSYA LİSTESİ
-         * ---------------------------------------------------------
-         */
-
-        ListView listView =
-                new ListView(this);
-
-        ArrayList<ExplorerItem> items =
-                getDirectoryItems(
-                        directory
+        TextView folder =
+                createCreateOption(
+                        "📁",
+                        "Yeni klasör"
                 );
 
-        ArrayList<String> names =
-                new ArrayList<>();
-
-        /*
-         * Üst klasöre çıkma satırı.
-         */
-
-        if (!directory.equals(repoDir)) {
-
-            names.add("⬆  ..");
-        }
-
-        for (ExplorerItem item : items) {
-
-            if (item.isFolder()) {
-
-                names.add(
-                        "📁  "
-                                + item.getName()
+        TextView file =
+                createCreateOption(
+                        "📄",
+                        "Yeni dosya"
                 );
 
-            } else {
-
-                names.add(
-                        getFileIcon(
-                                item.getName()
-                        )
-                                + "  "
-                                + item.getName()
-                );
-            }
-        }
-
-        ArrayAdapter<String> adapter =
-                new ArrayAdapter<>(
-                        this,
-                        android.R.layout.simple_list_item_1,
-                        names
-                );
-
-        listView.setAdapter(
-                adapter
+        root.addView(
+                folder
         );
 
         root.addView(
-                listView,
-                new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        0,
-                        1
-                )
+                file
         );
 
-        /*
-         * ---------------------------------------------------------
-         * LİSTE TIKLAMA
-         * ---------------------------------------------------------
-         */
-
-        listView.setOnItemClickListener(
-                (parent, view, position, id) -> {
-
-                    int actualIndex =
-                            position;
-
-                    /*
-                     * ".." satırı varsa gerçek
-                     * item indexini 1 azalt.
-                     */
-
-                    if (!directory.equals(repoDir)) {
-
-                        if (position == 0) {
-
-                            File parentDir =
-                                    directory.getParentFile();
-
-                            if (parentDir != null &&
-                                    isInsideProject(parentDir)) {
-
-                                dialog.dismiss();
-
-                                showFileExplorer(
-                                        parentDir
-                                );
-                            }
-
-                            return;
-                        }
-
-                        actualIndex =
-                                position - 1;
-                    }
-
-                    if (actualIndex < 0 ||
-                            actualIndex >= items.size()) {
-
-                        return;
-                    }
-
-                    ExplorerItem item =
-                            items.get(
-                                    actualIndex
-                            );
-
-                    File selected =
-                            item.getFile();
-
-                    if (selected.isDirectory()) {
-
-                        dialog.dismiss();
-
-                        showFileExplorer(
-                                selected
-                        );
-
-                    } else {
-
-                        dialog.dismiss();
-
-                        openFileInEditor(
-                                selected
-                        );
-                    }
-                }
-        );
-
-        /*
-         * ---------------------------------------------------------
-         * ALT BUTONLAR
-         * ---------------------------------------------------------
-         */
-
-        LinearLayout bottom =
-                new LinearLayout(this);
-
-        bottom.setOrientation(
-                LinearLayout.HORIZONTAL
-        );
-
-        bottom.setGravity(
-                Gravity.CENTER
-        );
-
-        Button rootButton =
-                new Button(this);
-
-        rootButton.setText(
-                "Proje kökü"
-        );
-
-        rootButton.setOnClickListener(
+        folder.setOnClickListener(
                 v -> {
 
-                    dialog.dismiss();
+                    createDialog.dismiss();
 
-                    showFileExplorer(
-                            repoDir
+                    showCreateFolderDialog(
+                            directory
                     );
                 }
         );
 
-        Button cancelButton =
-                new Button(this);
+        file.setOnClickListener(
+                v -> {
 
-        cancelButton.setText(
-                "Kapat"
+                    createDialog.dismiss();
+
+                    showCreateFileDialog(
+                            directory
+                    );
+                }
         );
 
-        cancelButton.setOnClickListener(
-                v -> dialog.dismiss()
-        );
-
-        bottom.addView(
-                rootButton,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1
-                )
-        );
-
-        bottom.addView(
-                cancelButton,
-                new LinearLayout.LayoutParams(
-                        0,
-                        dp(48),
-                        1
-                )
-        );
-
-        root.addView(
-                bottom
-        );
-
-        dialog.setView(
+        createDialog.setContentView(
                 root
         );
 
-        dialog.show();
+        createDialog.show();
 
-        /*
-         * Dialog boyutunu biraz büyüt.
-         */
+        Window window =
+                createDialog.getWindow();
 
-        if (dialog.getWindow() != null) {
+        if (window != null) {
 
-            dialog.getWindow().setLayout(
-                    (int) (getResources()
-                            .getDisplayMetrics()
-                            .widthPixels * 0.94f),
-                    (int) (getResources()
-                            .getDisplayMetrics()
-                            .heightPixels * 0.82f)
+            window.setBackgroundDrawableResource(
+                    android.R.color.transparent
+            );
+
+            WindowManager.LayoutParams params =
+                    window.getAttributes();
+
+            params.width =
+                    dp(300);
+
+            params.height =
+                    WindowManager.LayoutParams.WRAP_CONTENT;
+
+            window.setAttributes(
+                    params
             );
         }
     }
 
     /*
      * ============================================================
-     * KLASÖRDEKİ DOSYALARI AL
+     * OLUŞTURMA SEÇENEĞİ
+     * ============================================================
+     */
+
+    private TextView createCreateOption(
+            String icon,
+            String text
+    ) {
+
+        TextView option =
+                new TextView(this);
+
+        option.setText(
+                icon + "    " + text
+        );
+
+        option.setTextColor(
+                Color.WHITE
+        );
+
+        option.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                18
+        );
+
+        option.setGravity(
+                Gravity.CENTER_VERTICAL
+        );
+
+        option.setPadding(
+                dp(8),
+                dp(12),
+                dp(8),
+                dp(12)
+        );
+
+        return option;
+    }
+
+    /*
+     * ============================================================
+     * YENİ KLASÖR
+     * ============================================================
+     */
+
+    private void showCreateFolderDialog(
+            File directory
+    ) {
+
+        final EditText input =
+                new EditText(this);
+
+        input.setHint(
+                "Klasör adı"
+        );
+
+        input.setSingleLine(
+                true
+        );
+
+        new AlertDialog.Builder(this)
+                .setTitle(
+                        "Yeni klasör"
+                )
+                .setView(
+                        input
+                )
+                .setNegativeButton(
+                        "İptal",
+                        null
+                )
+                .setPositiveButton(
+                        "Oluştur",
+                        null
+                )
+                .create()
+                .show();
+
+        /*
+         * Pozitif butonun yanlış isimle boş klasör
+         * oluşturmaması için ayrı listener gerekiyor.
+         */
+
+        AlertDialog dialog =
+                new AlertDialog.Builder(this)
+                        .setTitle(
+                                "Yeni klasör"
+                        )
+                        .setView(
+                                input
+                        )
+                        .setNegativeButton(
+                                "İptal",
+                                null
+                        )
+                        .setPositiveButton(
+                                "Oluştur",
+                                null
+                        )
+                        .create();
+
+        dialog.setOnShowListener(
+                d -> {
+
+                    dialog.getButton(
+                            AlertDialog.BUTTON_POSITIVE
+                    ).setOnClickListener(
+                            v -> {
+
+                                String name =
+                                        input.getText()
+                                                .toString()
+                                                .trim();
+
+                                if (!isValidName(
+                                        name
+                                )) {
+
+                                    input.setError(
+                                            "Geçersiz klasör adı"
+                                    );
+
+                                    return;
+                                }
+
+                                File newFolder =
+                                        new File(
+                                                directory,
+                                                name
+                                        );
+
+                                if (!isInsideProject(
+                                        newFolder
+                                )) {
+
+                                    input.setError(
+                                            "Geçersiz klasör yolu"
+                                    );
+
+                                    return;
+                                }
+
+                                if (newFolder.exists()) {
+
+                                    input.setError(
+                                            "Bu isim zaten var"
+                                    );
+
+                                    return;
+                                }
+
+                                if (newFolder.mkdirs()) {
+
+                                    dialog.dismiss();
+
+                                    Toast.makeText(
+                                            this,
+                                            "Klasör oluşturuldu",
+                                            Toast.LENGTH_SHORT
+                                    ).show();
+
+                                    refreshExplorer();
+
+                                } else {
+
+                                    input.setError(
+                                            "Klasör oluşturulamadı"
+                                    );
+                                }
+                            }
+                    );
+                }
+        );
+
+        dialog.show();
+    }
+
+    /*
+     * ============================================================
+     * YENİ DOSYA
+     * ============================================================
+     */
+
+    private void showCreateFileDialog(
+            File directory
+    ) {
+
+        final EditText input =
+                new EditText(this);
+
+        input.setHint(
+                "Örneğin MainActivity.java"
+        );
+
+        input.setSingleLine(
+                true
+        );
+
+        AlertDialog dialog =
+                new AlertDialog.Builder(this)
+                        .setTitle(
+                                "Yeni dosya"
+                        )
+                        .setView(
+                                input
+                        )
+                        .setNegativeButton(
+                                "İptal",
+                                null
+                        )
+                        .setPositiveButton(
+                                "Oluştur",
+                                null
+                        )
+                        .create();
+
+        dialog.setOnShowListener(
+                d -> {
+
+                    dialog.getButton(
+                            AlertDialog.BUTTON_POSITIVE
+                    ).setOnClickListener(
+                            v -> {
+
+                                String name =
+                                        input.getText()
+                                                .toString()
+                                                .trim();
+
+                                if (!isValidFileName(
+                                        name
+                                )) {
+
+                                    input.setError(
+                                            "Geçersiz dosya adı"
+                                    );
+
+                                    return;
+                                }
+
+                                File newFile =
+                                        new File(
+                                                directory,
+                                                name
+                                        );
+
+                                if (!isInsideProject(
+                                        newFile
+                                )) {
+
+                                    input.setError(
+                                            "Geçersiz dosya yolu"
+                                    );
+
+                                    return;
+                                }
+
+                                if (newFile.exists()) {
+
+                                    input.setError(
+                                            "Bu dosya zaten var"
+                                    );
+
+                                    return;
+                                }
+
+                                try {
+
+                                    if (newFile.createNewFile()) {
+
+                                        dialog.dismiss();
+
+                                        Toast.makeText(
+                                                this,
+                                                "Dosya oluşturuldu",
+                                                Toast.LENGTH_SHORT
+                                        ).show();
+
+                                        refreshExplorer();
+
+                                        openFileInEditor(
+                                                newFile
+                                        );
+
+                                    } else {
+
+                                        input.setError(
+                                                "Dosya oluşturulamadı"
+                                        );
+                                    }
+
+                                } catch (Exception e) {
+
+                                    input.setError(
+                                            "Dosya oluşturulamadı"
+                                    );
+                                }
+                            }
+                    );
+                }
+        );
+
+        dialog.show();
+    }
+
+    /*
+     * ============================================================
+     * DOSYA MENÜSÜ
+     * ============================================================
+     */
+
+    private void showFileItemMenu(
+            ExplorerItem item,
+            View anchor
+    ) {
+
+        PopupMenu menu =
+                new PopupMenu(
+                        this,
+                        anchor
+                );
+
+        menu.getMenu().add(
+                "Aç"
+        );
+
+        menu.getMenu().add(
+                "Yeniden adlandır"
+        );
+
+        menu.getMenu().add(
+                "Sil"
+        );
+
+        menu.setOnMenuItemClickListener(
+                menuItem -> {
+
+                    String action =
+                            menuItem.getTitle()
+                                    .toString();
+
+                    if (action.equals(
+                            "Aç"
+                    )) {
+
+                        if (item.isFolder()) {
+
+                            explorerDirectory =
+                                    item.getFile();
+
+                            refreshExplorer();
+
+                        } else {
+
+                            if (fileExplorerDialog != null) {
+
+                                fileExplorerDialog.dismiss();
+                            }
+
+                            openFileInEditor(
+                                    item.getFile()
+                            );
+                        }
+
+                        return true;
+                    }
+
+                    if (action.equals(
+                            "Sil"
+                    )) {
+
+                        confirmDelete(
+                                item
+                        );
+
+                        return true;
+                    }
+
+                    if (action.equals(
+                            "Yeniden adlandır"
+                    )) {
+
+                        showRenameDialog(
+                                item
+                        );
+
+                        return true;
+                    }
+
+                    return true;
+                }
+        );
+
+        menu.show();
+    }
+
+    /*
+     * ============================================================
+     * YENİDEN ADLANDIR
+     * ============================================================
+     */
+
+    private void showRenameDialog(
+            ExplorerItem item
+    ) {
+
+        final EditText input =
+                new EditText(this);
+
+        input.setText(
+                item.getName()
+        );
+
+        input.setSingleLine(
+                true
+        );
+
+        new AlertDialog.Builder(this)
+                .setTitle(
+                        "Yeniden adlandır"
+                )
+                .setView(
+                        input
+                )
+                .setNegativeButton(
+                        "İptal",
+                        null
+                )
+                .setPositiveButton(
+                        "Kaydet",
+                        (dialog, which) -> {
+
+                            String name =
+                                    input.getText()
+                                            .toString()
+                                            .trim();
+
+                            if (!isValidName(
+                                    name
+                            )) {
+
+                                Toast.makeText(
+                                        this,
+                                        "Geçersiz isim",
+                                        Toast.LENGTH_SHORT
+                                ).show();
+
+                                return;
+                            }
+
+                            File oldFile =
+                                    item.getFile();
+
+                            File newFile =
+                                    new File(
+                                            oldFile.getParentFile(),
+                                            name
+                                    );
+
+                            if (!isInsideProject(
+                                    newFile
+                            )) {
+
+                                Toast.makeText(
+                                        this,
+                                        "Geçersiz yol",
+                                        Toast.LENGTH_SHORT
+                                ).show();
+
+                                return;
+                            }
+
+                            if (newFile.exists()) {
+
+                                Toast.makeText(
+                                        this,
+                                        "Bu isim zaten var",
+                                        Toast.LENGTH_SHORT
+                                ).show();
+
+                                return;
+                            }
+
+                            if (oldFile.renameTo(
+                                    newFile
+                            )) {
+
+                                Toast.makeText(
+                                        this,
+                                        "Yeniden adlandırıldı",
+                                        Toast.LENGTH_SHORT
+                                ).show();
+
+                                refreshExplorer();
+
+                            } else {
+
+                                Toast.makeText(
+                                        this,
+                                        "Yeniden adlandırılamadı",
+                                        Toast.LENGTH_SHORT
+                                ).show();
+                            }
+                        }
+                )
+                .show();
+    }
+
+    /*
+     * ============================================================
+     * SİL
+     * ============================================================
+     */
+
+    private void confirmDelete(
+            ExplorerItem item
+    ) {
+
+        new AlertDialog.Builder(this)
+                .setTitle(
+                        "Sil"
+                )
+                .setMessage(
+                        "\"" +
+                                item.getName()
+                                +
+                                "\" silinsin mi?"
+                )
+                .setNegativeButton(
+                        "İptal",
+                        null
+                )
+                .setPositiveButton(
+                        "Sil",
+                        (dialog, which) -> {
+
+                            if (deleteRecursively(
+                                    item.getFile()
+                            )) {
+
+                                Toast.makeText(
+                                        this,
+                                        "Silindi",
+                                        Toast.LENGTH_SHORT
+                                ).show();
+
+                                refreshExplorer();
+
+                            } else {
+
+                                Toast.makeText(
+                                        this,
+                                        "Silinemedi",
+                                        Toast.LENGTH_SHORT
+                                ).show();
+                            }
+                        }
+                )
+                .show();
+    }
+
+    /*
+     * ============================================================
+     * KLASÖR / DOSYA SİL
+     * ============================================================
+     */
+
+    private boolean deleteRecursively(
+            File file
+    ) {
+
+        if (file == null
+                || !isInsideProject(file)) {
+
+            return false;
+        }
+
+        if (file.isDirectory()) {
+
+            File[] children =
+                    file.listFiles();
+
+            if (children != null) {
+
+                for (File child :
+                        children) {
+
+                    if (!deleteRecursively(
+                            child
+                    )) {
+
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return file.delete();
+    }
+
+    /*
+     * ============================================================
+     * ÜST MENÜ
+     * ============================================================
+     */
+
+    private void showExplorerMenu(
+            View anchor
+    ) {
+
+        PopupMenu popup =
+                new PopupMenu(
+                        this,
+                        anchor
+                );
+
+        popup.getMenu().add(
+                "Görünüm"
+        );
+
+        popup.getMenu().add(
+                "Gizli dosyalar"
+        );
+
+        popup.getMenu().add(
+                "Yenile"
+        );
+
+        popup.getMenu().add(
+                "Kapat"
+        );
+
+        popup.setOnMenuItemClickListener(
+                item -> {
+
+                    String action =
+                            item.getTitle()
+                                    .toString();
+
+                    if (action.equals(
+                            "Yenile"
+                    )) {
+
+                        refreshExplorer();
+
+                    } else if (action.equals(
+                            "Kapat"
+                    )) {
+
+                        if (fileExplorerDialog != null) {
+
+                            fileExplorerDialog.dismiss();
+                        }
+
+                    } else {
+
+                        Toast.makeText(
+                                this,
+                                action
+                                        + " daha sonra bağlanacak",
+                                Toast.LENGTH_SHORT
+                        ).show();
+                    }
+
+                    return true;
+                }
+        );
+
+        popup.show();
+    }
+
+    /*
+     * ============================================================
+     * TOP ICON
+     * ============================================================
+     */
+
+    private TextView createTopIcon(
+            String text
+    ) {
+
+        TextView view =
+                new TextView(this);
+
+        view.setText(
+                text
+        );
+
+        view.setTextColor(
+                Color.WHITE
+        );
+
+        view.setTextSize(
+                TypedValue.COMPLEX_UNIT_SP,
+                32
+        );
+
+        view.setGravity(
+                Gravity.CENTER
+        );
+
+        return view;
+    }
+
+    /*
+     * ============================================================
+     * DOSYALARI AL
      * ============================================================
      */
 
@@ -842,13 +2557,12 @@ public class EditorActivity extends AppCompatActivity {
             return result;
         }
 
-        for (File file : files) {
+        for (File file :
+                files) {
 
-            /*
-             * Gizli dosyaları şimdilik göstermiyoruz.
-             */
+            if (file == null
+                    || file.isHidden()) {
 
-            if (file.isHidden()) {
                 continue;
             }
 
@@ -858,11 +2572,6 @@ public class EditorActivity extends AppCompatActivity {
                     )
             );
         }
-
-        /*
-         * Klasörler önce,
-         * dosyalar sonra.
-         */
 
         Collections.sort(
                 result,
@@ -899,252 +2608,6 @@ public class EditorActivity extends AppCompatActivity {
 
     /*
      * ============================================================
-     * OLUŞTUR MENÜSÜ
-     * ============================================================
-     */
-
-    private void showCreateMenu(
-            File directory,
-            AlertDialog explorerDialog
-    ) {
-
-        String[] options = {
-                "Yeni klasör",
-                "Yeni dosya"
-        };
-
-        new AlertDialog.Builder(this)
-                .setTitle("Oluştur")
-                .setItems(
-                        options,
-                        (dialog, which) -> {
-
-                            if (which == 0) {
-
-                                showCreateFolderDialog(
-                                        directory,
-                                        explorerDialog
-                                );
-
-                            } else {
-
-                                showCreateFileDialog(
-                                        directory,
-                                        explorerDialog
-                                );
-                            }
-                        }
-                )
-                .show();
-    }
-
-    /*
-     * ============================================================
-     * YENİ KLASÖR
-     * ============================================================
-     */
-
-    private void showCreateFolderDialog(
-            File directory,
-            AlertDialog explorerDialog
-    ) {
-
-        final EditText input =
-                new EditText(this);
-
-        input.setHint(
-                "Klasör adı"
-        );
-
-        input.setSingleLine(true);
-
-        new AlertDialog.Builder(this)
-                .setTitle("Yeni klasör")
-                .setView(input)
-                .setNegativeButton(
-                        "İptal",
-                        null
-                )
-                .setPositiveButton(
-                        "Oluştur",
-                        (dialog, which) -> {
-
-                            String name =
-                                    input.getText()
-                                            .toString()
-                                            .trim();
-
-                            if (!isValidName(name)) {
-
-                                Toast.makeText(
-                                        this,
-                                        "Geçersiz klasör adı",
-                                        Toast.LENGTH_SHORT
-                                ).show();
-
-                                return;
-                            }
-
-                            File newFolder =
-                                    new File(
-                                            directory,
-                                            name
-                                    );
-
-                            if (newFolder.exists()) {
-
-                                Toast.makeText(
-                                        this,
-                                        "Bu isim zaten kullanılıyor",
-                                        Toast.LENGTH_SHORT
-                                ).show();
-
-                                return;
-                            }
-
-                            if (newFolder.mkdirs()) {
-
-                                Toast.makeText(
-                                        this,
-                                        "Klasör oluşturuldu",
-                                        Toast.LENGTH_SHORT
-                                ).show();
-
-                                explorerDialog.dismiss();
-
-                                showFileExplorer(
-                                        directory
-                                );
-
-                            } else {
-
-                                Toast.makeText(
-                                        this,
-                                        "Klasör oluşturulamadı",
-                                        Toast.LENGTH_SHORT
-                                ).show();
-                            }
-                        }
-                )
-                .show();
-    }
-
-    /*
-     * ============================================================
-     * YENİ DOSYA
-     * ============================================================
-     */
-
-    private void showCreateFileDialog(
-            File directory,
-            AlertDialog explorerDialog
-    ) {
-
-        final EditText input =
-                new EditText(this);
-
-        input.setHint(
-                "Örneğin MainActivity.java"
-        );
-
-        input.setSingleLine(true);
-
-        new AlertDialog.Builder(this)
-                .setTitle("Yeni dosya")
-                .setView(input)
-                .setNegativeButton(
-                        "İptal",
-                        null
-                )
-                .setPositiveButton(
-                        "Oluştur",
-                        (dialog, which) -> {
-
-                            String name =
-                                    input.getText()
-                                            .toString()
-                                            .trim();
-
-                            if (!isValidFileName(name)) {
-
-                                Toast.makeText(
-                                        this,
-                                        "Geçersiz dosya adı",
-                                        Toast.LENGTH_SHORT
-                                ).show();
-
-                                return;
-                            }
-
-                            File newFile =
-                                    new File(
-                                            directory,
-                                            name
-                                    );
-
-                            if (newFile.exists()) {
-
-                                Toast.makeText(
-                                        this,
-                                        "Bu dosya zaten var",
-                                        Toast.LENGTH_SHORT
-                                ).show();
-
-                                return;
-                            }
-
-                            try {
-
-                                File parent =
-                                        newFile.getParentFile();
-
-                                if (parent == null ||
-                                        !isInsideProject(parent)) {
-
-                                    throw new Exception(
-                                            "Geçersiz dosya yolu"
-                                    );
-                                }
-
-                                if (newFile.createNewFile()) {
-
-                                    Toast.makeText(
-                                            this,
-                                            "Dosya oluşturuldu",
-                                            Toast.LENGTH_SHORT
-                                    ).show();
-
-                                    explorerDialog.dismiss();
-
-                                    showFileExplorer(
-                                            directory
-                                    );
-
-                                } else {
-
-                                    Toast.makeText(
-                                            this,
-                                            "Dosya oluşturulamadı",
-                                            Toast.LENGTH_SHORT
-                                    ).show();
-                                }
-
-                            } catch (Exception e) {
-
-                                Toast.makeText(
-                                        this,
-                                        "Dosya oluşturulamadı: "
-                                                + e.getMessage(),
-                                        Toast.LENGTH_LONG
-                                ).show();
-                            }
-                        }
-                )
-                .show();
-    }
-
-    /*
-     * ============================================================
      * DOSYA AÇ
      * ============================================================
      */
@@ -1153,9 +2616,9 @@ public class EditorActivity extends AppCompatActivity {
             File file
     ) {
 
-        if (file == null ||
-                !file.exists() ||
-                !file.isFile()) {
+        if (file == null
+                || !file.exists()
+                || !file.isFile()) {
 
             Toast.makeText(
                     this,
@@ -1166,22 +2629,21 @@ public class EditorActivity extends AppCompatActivity {
             return;
         }
 
-        if (!isInsideProject(file)) {
+        if (!isInsideProject(
+                file
+        )) {
 
             Toast.makeText(
                     this,
-                    "Bu dosya proje dışında",
+                    "Dosya proje dışında",
                     Toast.LENGTH_SHORT
             ).show();
 
             return;
         }
 
-        /*
-         * Çok büyük binary dosyaları kod editöründe açmayalım.
-         */
-
-        if (file.length() > 5 * 1024 * 1024) {
+        if (file.length()
+                > 5L * 1024L * 1024L) {
 
             Toast.makeText(
                     this,
@@ -1195,16 +2657,20 @@ public class EditorActivity extends AppCompatActivity {
         try {
 
             String content =
-                    readFile(file);
+                    readFile(
+                            file
+                    );
 
             currentFile =
                     file;
 
-            String relativePath =
-                    getRelativePath(file);
+            String relative =
+                    getRelativePath(
+                            file
+                    );
 
             etFilePath.setText(
-                    relativePath
+                    relative
             );
 
             etCode.setText(
@@ -1217,46 +2683,22 @@ public class EditorActivity extends AppCompatActivity {
 
             setStatus(
                     "Açıldı: "
-                            + relativePath
+                            + relative
             );
 
-            /*
-             * XML ise önizlemeyi hemen çalıştır.
-             */
-
             if (file.getName()
-                    .toLowerCase()
+                    .toLowerCase(
+                            Locale.ROOT
+                    )
                     .endsWith(".xml")) {
 
                 renderLiveXml(
                         content
                 );
+
             } else {
 
                 phoneCanvas.removeAllViews();
-
-                TextView info =
-                        new TextView(this);
-
-                info.setText(
-                        "Önizleme yalnızca XML layout dosyalarında çalışır."
-                );
-
-                info.setGravity(
-                        Gravity.CENTER
-                );
-
-                info.setTextColor(
-                        Color.DKGRAY
-                );
-
-                phoneCanvas.addView(
-                        info,
-                        new FrameLayout.LayoutParams(
-                                ViewGroup.LayoutParams.MATCH_PARENT,
-                                ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                );
             }
 
             Toast.makeText(
@@ -1318,10 +2760,6 @@ public class EditorActivity extends AppCompatActivity {
                 return;
             }
 
-            /*
-             * Klasörün üzerine yazmaya çalışma.
-             */
-
             if (file.exists()
                     && file.isDirectory()) {
 
@@ -1337,8 +2775,10 @@ public class EditorActivity extends AppCompatActivity {
             File parent =
                     file.getParentFile();
 
-            if (parent == null ||
-                    !isInsideProject(parent)) {
+            if (parent == null
+                    || !isInsideProject(
+                    parent
+            )) {
 
                 Toast.makeText(
                         this,
@@ -1361,17 +2801,19 @@ public class EditorActivity extends AppCompatActivity {
                 return;
             }
 
-            String code =
-                    etCode.getText()
-                            .toString();
-
-            try (FileOutputStream fos =
-                         new FileOutputStream(file)) {
+            try (
+                    FileOutputStream fos =
+                            new FileOutputStream(
+                                    file
+                            )
+            ) {
 
                 fos.write(
-                        code.getBytes(
-                                StandardCharsets.UTF_8
-                        )
+                        etCode.getText()
+                                .toString()
+                                .getBytes(
+                                        StandardCharsets.UTF_8
+                                )
                 );
             }
 
@@ -1380,7 +2822,9 @@ public class EditorActivity extends AppCompatActivity {
 
             setStatus(
                     "Kaydedildi: "
-                            + getRelativePath(file)
+                            + getRelativePath(
+                            file
+                    )
             );
 
             Toast.makeText(
@@ -1417,10 +2861,12 @@ public class EditorActivity extends AppCompatActivity {
                 BufferedReader reader =
                         new BufferedReader(
                                 new InputStreamReader(
-                                        new FileInputStream(file),
+                                        new FileInputStream(
+                                                file
+                                        ),
                                         StandardCharsets.UTF_8
                                 )
-                        )
+                )
         ) {
 
             String line;
@@ -1441,15 +2887,7 @@ public class EditorActivity extends AppCompatActivity {
 
     /*
      * ============================================================
-     * PROJE YOLU GÜVENLİK KONTROLÜ
-     * ============================================================
-     *
-     * Örneğin:
-     *
-     * ../başka-klasör
-     *
-     * gibi bir yol kullanarak proje dışına çıkılmasını
-     * engelliyoruz.
+     * GÜVENLİ YOL
      * ============================================================
      */
 
@@ -1462,28 +2900,25 @@ public class EditorActivity extends AppCompatActivity {
         }
 
         String clean =
-                relativePath.trim();
-
-        if (clean.isEmpty()) {
-            return null;
-        }
-
-        /*
-         * Windows tarzı yolu da engelle.
-         */
-
-        clean =
-                clean.replace(
-                        '\\',
-                        '/'
-                );
+                relativePath
+                        .trim()
+                        .replace(
+                                '\\',
+                                '/'
+                        );
 
         while (
                 clean.startsWith("/")
         ) {
 
             clean =
-                    clean.substring(1);
+                    clean.substring(
+                            1
+                    );
+        }
+
+        if (clean.isEmpty()) {
+            return null;
         }
 
         File result =
@@ -1492,44 +2927,22 @@ public class EditorActivity extends AppCompatActivity {
                         clean
                 );
 
-        try {
-
-            String root =
-                    repoDir
-                            .getCanonicalPath();
-
-            String target =
-                    result
-                            .getCanonicalPath();
-
-            if (target.equals(root)) {
-                return result;
-            }
-
-            if (!target.startsWith(
-                    root + File.separator
-            )) {
-
-                return null;
-            }
-
-            return result;
-
-        } catch (Exception e) {
-
-            return null;
-        }
+        return isInsideProject(
+                result
+        )
+                ? result
+                : null;
     }
-
-    /*
-     * ============================================================
-     * PROJE İÇİNDE Mİ?
-     * ============================================================
-     */
 
     private boolean isInsideProject(
             File file
     ) {
+
+        if (file == null
+                || repoDir == null) {
+
+            return false;
+        }
 
         try {
 
@@ -1543,7 +2956,8 @@ public class EditorActivity extends AppCompatActivity {
 
             return target.equals(root)
                     || target.startsWith(
-                    root + File.separator
+                    root
+                            + File.separator
             );
 
         } catch (Exception e) {
@@ -1572,7 +2986,10 @@ public class EditorActivity extends AppCompatActivity {
                     file
                             .getCanonicalPath();
 
-            if (target.equals(root)) {
+            if (target.equals(
+                    root
+            )) {
+
                 return "/";
             }
 
@@ -1604,7 +3021,32 @@ public class EditorActivity extends AppCompatActivity {
 
     /*
      * ============================================================
-     * DOSYA ADI KONTROLÜ
+     * KISA YOL
+     * ============================================================
+     */
+
+    private String getShortExplorerPath(
+            File directory
+    ) {
+
+        String relative =
+                getRelativePath(
+                        directory
+                );
+
+        if (relative.equals("/")) {
+
+            return repoDir.getName();
+        }
+
+        return repoDir.getName()
+                + "/"
+                + relative;
+    }
+
+    /*
+     * ============================================================
+     * İSİM KONTROLÜ
      * ============================================================
      */
 
@@ -1612,8 +3054,8 @@ public class EditorActivity extends AppCompatActivity {
             String name
     ) {
 
-        if (name == null ||
-                name.trim().isEmpty()) {
+        if (name == null
+                || name.trim().isEmpty()) {
 
             return false;
         }
@@ -1624,114 +3066,129 @@ public class EditorActivity extends AppCompatActivity {
             return false;
         }
 
-        return !name.contains("/")
-                && !name.contains("\\")
-                && !name.contains(":")
-                && !name.contains("*")
-                && !name.contains("?")
-                && !name.contains("\"")
-                && !name.contains("<")
-                && !name.contains(">")
-                && !name.contains("|");
+        String invalid =
+                "\\/:*?\"<>|";
+
+        for (int i = 0;
+             i < invalid.length();
+             i++) {
+
+            if (name.indexOf(
+                    invalid.charAt(i)
+            ) >= 0) {
+
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private boolean isValidFileName(
             String name
     ) {
 
-        if (!isValidName(name)) {
-            return false;
-        }
-
-        /*
-         * Dosyanın uzantısız olmasına izin veriyoruz.
-         * Örneğin:
-         *
-         * README
-         * MainActivity.java
-         * activity_main.xml
-         * build.gradle
-         */
-
-        return true;
+        return isValidName(
+                name
+        );
     }
 
     /*
      * ============================================================
-     * DOSYA İKONU
+     * DOSYA BOYUTU
      * ============================================================
      */
 
-    private String getFileIcon(
-            String name
+    private String formatFileSize(
+            long bytes
     ) {
 
-        String lower =
-                name.toLowerCase();
+        if (bytes < 1024) {
 
-        if (lower.endsWith(".java")) {
-            return "☕";
+            return bytes + " B";
         }
 
-        if (lower.endsWith(".kt")) {
-            return "K";
+        if (bytes < 1024 * 1024) {
+
+            return String.format(
+                    Locale.ROOT,
+                    "%.2f KB",
+                    bytes / 1024.0
+            );
         }
 
-        if (lower.endsWith(".xml")) {
-            return "📄";
+        if (bytes < 1024L * 1024L * 1024L) {
+
+            return String.format(
+                    Locale.ROOT,
+                    "%.2f MB",
+                    bytes / (
+                            1024.0
+                                    * 1024.0
+                    )
+            );
         }
 
-        if (lower.endsWith(".gradle")) {
-            return "⚙";
-        }
-
-        if (lower.endsWith(".json")) {
-            return "{}";
-        }
-
-        if (lower.endsWith(".txt")) {
-            return "📝";
-        }
-
-        if (lower.endsWith(".png")
-                || lower.endsWith(".jpg")
-                || lower.endsWith(".jpeg")
-                || lower.endsWith(".webp")) {
-
-            return "🖼";
-        }
-
-        return "📄";
+        return String.format(
+                Locale.ROOT,
+                "%.2f GB",
+                bytes / (
+                        1024.0
+                                * 1024.0
+                                * 1024.0
+                )
+        );
     }
 
     /*
      * ============================================================
-     * CANLI XML ÖNİZLEME
+     * TARİH
      * ============================================================
-     *
-     * Önceki kod:
-     *
-     * if (xml.contains("<Button"))
-     *
-     * şeklinde çalışıyordu.
-     *
-     * Bu gerçek bir XML parser değildi.
-     *
-     * Burada XML'i Android XmlPullParser ile gerçekten
-     * okumaya başlıyoruz.
-     *
-     * Bu ilk sürüm temel View'ları destekler:
-     *
-     * LinearLayout
-     * FrameLayout
-     * RelativeLayout
-     * TextView
-     * Button
-     * EditText
-     * ImageView
-     *
-     * Daha sonra ConstraintLayout ve diğer Android
-     * bileşenlerini ayrıca ekleyebiliriz.
+     */
+
+    private String formatDate(
+            long time
+    ) {
+
+        if (time <= 0) {
+
+            return "";
+        }
+
+        java.text.SimpleDateFormat format =
+                new java.text.SimpleDateFormat(
+                        "dd.MM.yyyy",
+                        Locale.getDefault()
+                );
+
+        return format.format(
+                new java.util.Date(
+                        time
+                )
+        );
+    }
+
+    /*
+     * ============================================================
+     * STATUS
+     * ============================================================
+     */
+
+    private void setStatus(
+            String text
+    ) {
+
+        if (txtStatus != null) {
+
+            txtStatus.setText(
+                    text
+            );
+        }
+    }
+
+    /*
+     * ============================================================
+     * XML ÖNİZLEME
      * ============================================================
      */
 
@@ -1739,27 +3196,22 @@ public class EditorActivity extends AppCompatActivity {
             String xmlCode
     ) {
 
-        if (xmlCode == null ||
-                xmlCode.trim().isEmpty()) {
+        if (xmlCode == null
+                || xmlCode.trim().isEmpty()) {
 
             phoneCanvas.removeAllViews();
 
             return;
         }
 
-        /*
-         * Sadece XML dosyalarında önizleme.
-         */
+        if (currentFile != null
+                && !currentFile.getName()
+                .toLowerCase(
+                        Locale.ROOT
+                )
+                .endsWith(".xml")) {
 
-        if (currentFile != null) {
-
-            String name =
-                    currentFile.getName()
-                            .toLowerCase();
-
-            if (!name.endsWith(".xml")) {
-                return;
-            }
+            return;
         }
 
         try {
@@ -1783,7 +3235,7 @@ public class EditorActivity extends AppCompatActivity {
 
             phoneCanvas.removeAllViews();
 
-            ArrayList<View> viewStack =
+            ArrayList<View> stack =
                     new ArrayList<>();
 
             int event;
@@ -1796,12 +3248,9 @@ public class EditorActivity extends AppCompatActivity {
                 if (event ==
                         XmlPullParser.START_TAG) {
 
-                    String tag =
-                            parser.getName();
-
                     View view =
                             createPreviewView(
-                                    tag,
+                                    parser.getName(),
                                     parser
                             );
 
@@ -1809,56 +3258,46 @@ public class EditorActivity extends AppCompatActivity {
                         continue;
                     }
 
-                    /*
-                     * İlk View telefon ekranının
-                     * root'u olur.
-                     */
-
-                    if (viewStack.isEmpty()) {
+                    if (stack.isEmpty()) {
 
                         phoneCanvas.addView(
                                 view,
                                 createPreviewLayoutParams(
                                         view,
-                                        null
+                                        null,
+                                        parser
                                 )
                         );
 
                     } else {
 
                         View parent =
-                                viewStack.get(
-                                        viewStack.size() - 1
+                                stack.get(
+                                        stack.size() - 1
                                 );
 
                         if (parent instanceof ViewGroup) {
 
-                            ViewGroup group =
-                                    (ViewGroup) parent;
-
-                            group.addView(
-                                    view,
-                                    createPreviewLayoutParams(
+                            ((ViewGroup) parent)
+                                    .addView(
                                             view,
-                                            group
-                                    )
-                            );
+                                            createPreviewLayoutParams(
+                                                    view,
+                                                    (ViewGroup) parent,
+                                                    parser
+                                            )
+                                    );
                         }
                     }
 
-                    /*
-                     * Container ise stack'e ekle.
-                     */
-
                     if (view instanceof ViewGroup) {
 
-                        viewStack.add(
+                        stack.add(
                                 view
                         );
                     }
-                }
 
-                else if (
+                } else if (
                         event ==
                                 XmlPullParser.END_TAG
                 ) {
@@ -1866,11 +3305,13 @@ public class EditorActivity extends AppCompatActivity {
                     String tag =
                             parser.getName();
 
-                    if (isContainerTag(tag)
-                            && !viewStack.isEmpty()) {
+                    if (isContainerTag(
+                            tag
+                    )
+                            && !stack.isEmpty()) {
 
-                        viewStack.remove(
-                                viewStack.size() - 1
+                        stack.remove(
+                                stack.size() - 1
                         );
                     }
                 }
@@ -1882,23 +3323,11 @@ public class EditorActivity extends AppCompatActivity {
 
         } catch (Exception e) {
 
-            /*
-             * Kullanıcı yazarken XML geçici olarak
-             * hatalı olabilir. Uygulamayı çökertmek
-             * yerine ekranda hata gösteriyoruz.
-             */
-
             showPreviewError(
                     e.getMessage()
             );
         }
     }
-
-    /*
-     * ============================================================
-     * XML VIEW OLUŞTUR
-     * ============================================================
-     */
 
     private View createPreviewView(
             String tag,
@@ -1909,30 +3338,18 @@ public class EditorActivity extends AppCompatActivity {
             return null;
         }
 
-        String cleanTag =
-                tag;
+        if (tag.contains(".")) {
 
-        /*
-         * Android namespace olmayan / olan
-         * tag'ları basitleştir.
-         */
-
-        if (cleanTag.contains(".")) {
-
-            int index =
-                    cleanTag.lastIndexOf(
-                            "."
-                    );
-
-            cleanTag =
-                    cleanTag.substring(
-                            index + 1
+            tag =
+                    tag.substring(
+                            tag.lastIndexOf(".")
+                                    + 1
                     );
         }
 
         View view;
 
-        switch (cleanTag) {
+        switch (tag) {
 
             case "LinearLayout":
 
@@ -1947,20 +3364,14 @@ public class EditorActivity extends AppCompatActivity {
                                 "orientation"
                         );
 
-                if ("horizontal".equalsIgnoreCase(
-                        orientation
-                )) {
-
-                    linear.setOrientation(
-                            LinearLayout.HORIZONTAL
-                    );
-
-                } else {
-
-                    linear.setOrientation(
-                            LinearLayout.VERTICAL
-                    );
-                }
+                linear.setOrientation(
+                        "horizontal"
+                                .equalsIgnoreCase(
+                                        orientation
+                                )
+                                ? LinearLayout.HORIZONTAL
+                                : LinearLayout.VERTICAL
+                );
 
                 view = linear;
 
@@ -1986,31 +3397,30 @@ public class EditorActivity extends AppCompatActivity {
 
             case "TextView":
 
-                TextView textView =
+                TextView text =
                         new TextView(
                                 this
                         );
 
-                textView.setText(
+                text.setText(
                         getAttribute(
                                 parser,
                                 "text"
                         )
                 );
 
-                textView.setTextSize(
+                text.setTextSize(
                         TypedValue.COMPLEX_UNIT_SP,
                         getTextSize(
                                 parser
                         )
                 );
 
-                textView.setTextColor(
+                text.setTextColor(
                         Color.DKGRAY
                 );
 
-                view =
-                        textView;
+                view = text;
 
                 break;
 
@@ -2033,57 +3443,47 @@ public class EditorActivity extends AppCompatActivity {
                                 : buttonText
                 );
 
-                view =
-                        button;
+                view = button;
 
                 break;
 
             case "EditText":
 
-                EditText editText =
+                EditText edit =
                         new EditText(
                                 this
                         );
 
-                editText.setHint(
+                edit.setHint(
                         getAttribute(
                                 parser,
                                 "hint"
                         )
                 );
 
-                editText.setText(
+                edit.setText(
                         getAttribute(
                                 parser,
                                 "text"
                         )
                 );
 
-                view =
-                        editText;
+                view = edit;
 
                 break;
 
             case "ImageView":
 
-                android.widget.ImageView imageView =
+                android.widget.ImageView image =
                         new android.widget.ImageView(
                                 this
                         );
 
-                imageView.setBackgroundColor(
+                image.setBackgroundColor(
                         Color.LTGRAY
                 );
 
-                imageView.setContentDescription(
-                        getAttribute(
-                                parser,
-                                "contentDescription"
-                        )
-                );
-
-                view =
-                        imageView;
+                view = image;
 
                 break;
 
@@ -2098,11 +3498,6 @@ public class EditorActivity extends AppCompatActivity {
 
             default:
 
-                /*
-                 * Desteklemediğimiz View'ları
-                 * şimdilik atlıyoruz.
-                 */
-
                 return null;
         }
 
@@ -2113,12 +3508,6 @@ public class EditorActivity extends AppCompatActivity {
 
         return view;
     }
-
-    /*
-     * ============================================================
-     * ORTAK XML ÖZELLİKLERİ
-     * ============================================================
-     */
 
     private void applyCommonAttributes(
             View view,
@@ -2153,81 +3542,27 @@ public class EditorActivity extends AppCompatActivity {
 
         if (!padding.isEmpty()) {
 
-            int value =
+            int p =
                     parseDimension(
                             padding,
                             0
                     );
 
             view.setPadding(
-                    value,
-                    value,
-                    value,
-                    value
+                    p,
+                    p,
+                    p,
+                    p
             );
         }
-
-        String gravity =
-                getAttribute(
-                        parser,
-                        "gravity"
-                );
-
-        if (!gravity.isEmpty()) {
-
-            if (view instanceof TextView) {
-
-                TextView textView =
-                        (TextView) view;
-
-                if (gravity.contains("center")) {
-
-                    textView.setGravity(
-                            Gravity.CENTER
-                    );
-
-                } else if (
-                        gravity.contains("start")
-                ) {
-
-                    textView.setGravity(
-                            Gravity.START
-                                    | Gravity.TOP
-                    );
-                }
-            }
-        }
     }
-
-    /*
-     * ============================================================
-     * LAYOUT PARAMETRELERİ
-     * ============================================================
-     */
 
     private ViewGroup.LayoutParams
     createPreviewLayoutParams(
             View view,
-            ViewGroup parent
+            ViewGroup parent,
+            XmlPullParser parser
     ) {
-
-        int width =
-                ViewGroup.LayoutParams.WRAP_CONTENT;
-
-        int height =
-                ViewGroup.LayoutParams.WRAP_CONTENT;
-
-        /*
-         * XML'deki layout_width ve
-         * layout_height değerlerini alıyoruz.
-         *
-         * Şimdilik match_parent / wrap_content
-         * destekleniyor.
-         */
-
-        /*
-         * Parent yoksa root.
-         */
 
         if (parent == null) {
 
@@ -2237,42 +3572,92 @@ public class EditorActivity extends AppCompatActivity {
             );
         }
 
+        int width =
+                parseLayoutSize(
+                        getAttribute(
+                                parser,
+                                "layout_width"
+                        )
+                );
+
+        int height =
+                parseLayoutSize(
+                        getAttribute(
+                                parser,
+                                "layout_height"
+                        )
+                );
+
+        if (parent instanceof LinearLayout) {
+
+            return new LinearLayout.LayoutParams(
+                    width,
+                    height
+            );
+        }
+
+        if (parent instanceof FrameLayout) {
+
+            return new FrameLayout.LayoutParams(
+                    width,
+                    height
+            );
+        }
+
+        if (parent instanceof android.widget.RelativeLayout) {
+
+            return new android.widget.RelativeLayout.LayoutParams(
+                    width,
+                    height
+            );
+        }
+
         return new ViewGroup.LayoutParams(
                 width,
                 height
         );
     }
 
-    /*
-     * ============================================================
-     * CONTAINER MI?
-     * ============================================================
-     */
+    private int parseLayoutSize(
+            String value
+    ) {
+
+        if (value == null
+                || value.isEmpty()
+                || value.equals(
+                "wrap_content"
+        )) {
+
+            return ViewGroup.LayoutParams.WRAP_CONTENT;
+        }
+
+        if (value.equals(
+                "match_parent"
+        )) {
+
+            return ViewGroup.LayoutParams.MATCH_PARENT;
+        }
+
+        return parseDimension(
+                value,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        );
+    }
 
     private boolean isContainerTag(
             String tag
     ) {
 
-        if (tag == null) {
-            return false;
-        }
-
-        return tag.equals(
-                "LinearLayout"
+        return "LinearLayout".equals(
+                tag
         )
-                || tag.equals(
-                "FrameLayout"
+                || "FrameLayout".equals(
+                tag
         )
-                || tag.equals(
-                "RelativeLayout"
+                || "RelativeLayout".equals(
+                tag
         );
     }
-
-    /*
-     * ============================================================
-     * XML ATTRIBUTE
-     * ============================================================
-     */
 
     private String getAttribute(
             XmlPullParser parser,
@@ -2299,12 +3684,6 @@ public class EditorActivity extends AppCompatActivity {
                 : value;
     }
 
-    /*
-     * ============================================================
-     * TEXT SIZE
-     * ============================================================
-     */
-
     private float getTextSize(
             XmlPullParser parser
     ) {
@@ -2321,16 +3700,13 @@ public class EditorActivity extends AppCompatActivity {
 
         try {
 
-            value =
+            return Float.parseFloat(
                     value
                             .replace(
                                     "sp",
                                     ""
                             )
-                            .trim();
-
-            return Float.parseFloat(
-                    value
+                            .trim()
             );
 
         } catch (Exception e) {
@@ -2339,19 +3715,13 @@ public class EditorActivity extends AppCompatActivity {
         }
     }
 
-    /*
-     * ============================================================
-     * DIMENSION
-     * ============================================================
-     */
-
     private int parseDimension(
             String value,
             int defaultValue
     ) {
 
-        if (value == null ||
-                value.isEmpty()) {
+        if (value == null
+                || value.isEmpty()) {
 
             return defaultValue;
         }
@@ -2389,12 +3759,6 @@ public class EditorActivity extends AppCompatActivity {
         }
     }
 
-    /*
-     * ============================================================
-     * ÖNİZLEME HATASI
-     * ============================================================
-     */
-
     private void showPreviewError(
             String message
     ) {
@@ -2415,15 +3779,10 @@ public class EditorActivity extends AppCompatActivity {
 
         error.setTextColor(
                 Color.rgb(
-                        180,
-                        0,
-                        0
+                        220,
+                        80,
+                        80
                 )
-        );
-
-        error.setTextSize(
-                TypedValue.COMPLEX_UNIT_SP,
-                12
         );
 
         error.setGravity(
@@ -2446,31 +3805,8 @@ public class EditorActivity extends AppCompatActivity {
         );
 
         setStatus(
-                "XML hatası: "
-                        + (
-                        message == null
-                                ? "Bilinmeyen hata"
-                                : message
-                )
+                "XML hatası"
         );
-    }
-
-    /*
-     * ============================================================
-     * DURUM ÇUBUĞU
-     * ============================================================
-     */
-
-    private void setStatus(
-            String text
-    ) {
-
-        if (txtStatus != null) {
-
-            txtStatus.setText(
-                    text
-            );
-        }
     }
 
     /*
@@ -2506,6 +3842,12 @@ public class EditorActivity extends AppCompatActivity {
             previewHandler.removeCallbacks(
                     previewRunnable
             );
+        }
+
+        if (fileExplorerDialog != null
+                && fileExplorerDialog.isShowing()) {
+
+            fileExplorerDialog.dismiss();
         }
 
         super.onDestroy();
